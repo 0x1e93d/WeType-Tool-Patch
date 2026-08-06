@@ -236,25 +236,25 @@ jobs:
 
           notes_file="release-dist/RELEASE_NOTES.md"
           {
-            printf '%s\n' '## WeType combined packages'
+            printf '%s\n' "## WeType ${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）免 Root 内置版"
             printf '\n'
-            printf '%s\n' "- Base WeType: ${WETYPE_VERSION} (${WETYPE_VERSION_CODE})"
-            printf '%s\n' "- Monet release: [${MONET_TAG}](https://github.com/${MONET_REPOSITORY}/releases/tag/${MONET_TAG})"
-            printf '%s\n' "- Tool release: [${TOOL_TAG}](https://github.com/${TOOL_REPOSITORY}/releases/tag/${TOOL_TAG})"
-            printf '%s\n' "- Embedded module: Legacy ${TOOL_VERSION} only"
-            printf '%s\n' "- Patcher: NPatch ${NPATCH_TAG}, signed with the built-in NPatch keystore"
-            printf '%s\n' '- Minimum Android version: Android 9 (API 28)'
+            printf '%s\n' "- WeType 底包：${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）"
+            printf '%s\n' "- WeType Monet：[${MONET_TAG}](https://github.com/${MONET_REPOSITORY}/releases/tag/${MONET_TAG})"
+            printf '%s\n' "- WeType Tool：[${TOOL_TAG}](https://github.com/${TOOL_REPOSITORY}/releases/tag/${TOOL_TAG})"
+            printf '%s\n' "- 内置模块：WeType Tool Legacy ${TOOL_VERSION}"
+            printf '%s\n' "- 打包工具：NPatch ${NPATCH_TAG}，使用 NPatch 内置签名"
+            printf '%s\n' '- 最低 Android 版本：Android 9（API 28）'
             printf '\n'
-            printf '%s\n' '## Assets'
-            printf '%s\n' "- \`$(basename "$ORIGINAL_OUT")\`: Original WeType with the Legacy Tool module embedded."
-            printf '%s\n' "- \`$(basename "$MONET_OUT")\`: Monet WeType with the Legacy Tool module embedded."
-            printf '%s\n' '- `SHA256SUMS.txt`: SHA-256 checksums for both APKs.'
+            printf '%s\n' '## 安装包'
+            printf '%s\n' "- \`$(basename "$ORIGINAL_OUT")\`：官方 WeType 输入法内置 Tool"
+            printf '%s\n' "- \`$(basename "$MONET_OUT")\`：WeType Monet 内置 Tool"
+            printf '%s\n' '- `SHA256SUMS.txt`：两个安装包的 SHA-256 校验值'
           } > "$notes_file"
 
           gh release create "$bundle_tag" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "WeType ${WETYPE_VERSION} (${WETYPE_VERSION_CODE}) - Monet ${MONET_VERSION} + Tool ${TOOL_VERSION}" \
+            --title "WeType ${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）免 Root 内置版" \
             --notes-file "$notes_file" \
             "$ORIGINAL_OUT" \
             "$MONET_OUT" \
