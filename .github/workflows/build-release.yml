@@ -1,0 +1,261 @@
+name: Build WeType Tool Patch releases
+
+on:
+  repository_dispatch:
+    types:
+      - tool-published
+      - monet-published
+  workflow_dispatch:
+    inputs:
+      monet_release_tag:
+        description: Optional WeType Monet release tag, for example v2
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wetype-tool-patch-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and publish rootless packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TOOL_REPOSITORY: 0x1e93d/WeType-Tool-Releases
+      MONET_REPOSITORY: 0x1e93d/WeType_Monet
+      NPATCH_REPOSITORY: 7723mod/NPatch
+      BCPROV_VERSION: 1.78.1
+      BCPROV_SHA256: add5915e6acfc6ab5836e1fd8a5e21c6488536a8c1f21f386eeb3bf280b702d7
+
+    steps:
+      - name: Set up JDK 21
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install APK verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes apksigner
+
+      - name: Resolve source releases
+        id: source
+        shell: bash
+        env:
+          EVENT_TYPE: ${{ github.event.action || '' }}
+          DISPATCH_MONET_TAG: ${{ github.event.client_payload.monet_release_tag || '' }}
+          MANUAL_MONET_TAG: ${{ inputs.monet_release_tag || '' }}
+        run: |
+          set -euo pipefail
+          # Tool Releases is public; always resolve its newest formal release here.
+          tool_tag=""
+          monet_tag="$MANUAL_MONET_TAG"
+
+          case "$EVENT_TYPE" in
+            monet-published)
+              monet_tag="${monet_tag:-$DISPATCH_MONET_TAG}"
+              ;;
+            tool-published|'')
+              ;;
+            *)
+              echo "Unsupported repository dispatch event: $EVENT_TYPE" >&2
+              exit 2
+              ;;
+          esac
+
+          if [ -z "$tool_tag" ]; then
+            tool_tag="$(gh release list --repo "$TOOL_REPOSITORY" --limit 100 --json tagName,publishedAt,isDraft,isPrerelease --jq '[.[] | select((.isDraft | not) and (.isPrerelease | not) and (.tagName | test("^tool-v[0-9]+\\.[0-9]+\\.[0-9]+$")))] | sort_by(.tagName | ltrimstr("tool-v") | split(".") | map(tonumber)) | last | .tagName // empty')"
+          fi
+          if [ -z "$monet_tag" ]; then
+            monet_tag="$(gh release view --repo "$MONET_REPOSITORY" --json tagName --jq '.tagName')"
+          fi
+
+          if ! [[ "$tool_tag" =~ ^tool-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid WeType Tool release tag: $tool_tag" >&2
+            exit 2
+          fi
+          if ! [[ "$monet_tag" =~ ^v[0-9]+$ ]]; then
+            echo "Invalid WeType Monet release tag: $monet_tag" >&2
+            exit 2
+          fi
+          gh release view "$tool_tag" --repo "$TOOL_REPOSITORY" > /dev/null
+          gh release view "$monet_tag" --repo "$MONET_REPOSITORY" > /dev/null
+
+          echo "tool_tag=$tool_tag" >> "$GITHUB_OUTPUT"
+          echo "tool_version=${tool_tag#tool-}" >> "$GITHUB_OUTPUT"
+          echo "monet_tag=$monet_tag" >> "$GITHUB_OUTPUT"
+          echo "monet_version=$monet_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download upstream APKs and latest NPatch JAR
+        id: download
+        shell: bash
+        env:
+          TOOL_TAG: ${{ steps.source.outputs.tool_tag }}
+          TOOL_VERSION: ${{ steps.source.outputs.tool_version }}
+          MONET_TAG: ${{ steps.source.outputs.monet_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/tool inputs/monet tools release-dist
+
+          gh release download "$TOOL_TAG" \
+            --repo "$TOOL_REPOSITORY" \
+            --dir inputs/tool \
+            --pattern "WeType-Tool-${TOOL_VERSION}-legacy.apk"
+          tool_legacy="inputs/tool/WeType-Tool-${TOOL_VERSION}-legacy.apk"
+          test -s "$tool_legacy"
+
+          gh release download "$MONET_TAG" \
+            --repo "$MONET_REPOSITORY" \
+            --dir inputs/monet \
+            --pattern 'Wetype_*.apk'
+          mapfile -t original_apks < <(find inputs/monet -maxdepth 1 -type f -name 'Wetype_*.apk' ! -name 'Wetype_Monet_*.apk' -print)
+          mapfile -t monet_apks < <(find inputs/monet -maxdepth 1 -type f -name 'Wetype_Monet_*.apk' -print)
+          if [ "${#original_apks[@]}" -ne 1 ] || [ "${#monet_apks[@]}" -ne 1 ]; then
+            echo "Expected exactly one original APK and one Monet APK in release $MONET_TAG" >&2
+            find inputs/monet -maxdepth 1 -type f -printf '%f\n' >&2
+            exit 1
+          fi
+
+          npatch_tag="$(gh release view --repo "$NPATCH_REPOSITORY" --json tagName --jq '.tagName')"
+          gh release download "$npatch_tag" \
+            --repo "$NPATCH_REPOSITORY" \
+            --dir tools \
+            --pattern 'jar-v*-release.jar'
+          mapfile -t npatch_jars < <(find tools -maxdepth 1 -type f -name 'jar-v*-release.jar' -print)
+          if [ "${#npatch_jars[@]}" -ne 1 ]; then
+            echo "Expected exactly one NPatch release JAR in release $npatch_tag" >&2
+            find tools -maxdepth 1 -type f -printf '%f\n' >&2
+            exit 1
+          fi
+          mv "${npatch_jars[0]}" tools/npatch.jar
+          test -s tools/npatch.jar
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            "https://repo1.maven.org/maven2/org/bouncycastle/bcprov-jdk18on/${BCPROV_VERSION}/bcprov-jdk18on-${BCPROV_VERSION}.jar" \
+            --output tools/bcprov.jar
+          echo "$BCPROV_SHA256  tools/bcprov.jar" | sha256sum --check --status
+
+          original_name="$(basename "${original_apks[0]}")"
+          if [[ "$original_name" =~ ^Wetype_([0-9]+([.][0-9]+)+)\(([0-9]+)\)\.apk$ ]]; then
+            wetype_version="${BASH_REMATCH[1]}"
+            wetype_version_code="${BASH_REMATCH[3]}"
+          elif [[ "$original_name" =~ ^Wetype_([0-9]+([.][0-9]+)+)\.([0-9]+)\.apk$ ]]; then
+            wetype_version="${BASH_REMATCH[1]}"
+            wetype_version_code="${BASH_REMATCH[3]}"
+          else
+            echo "Unexpected original APK filename: $original_name" >&2
+            exit 1
+          fi
+          echo "original_apk=${original_apks[0]}" >> "$GITHUB_OUTPUT"
+          echo "monet_apk=${monet_apks[0]}" >> "$GITHUB_OUTPUT"
+          echo "tool_legacy=$tool_legacy" >> "$GITHUB_OUTPUT"
+          echo "npatch_tag=$npatch_tag" >> "$GITHUB_OUTPUT"
+          echo "wetype_version=$wetype_version" >> "$GITHUB_OUTPUT"
+          echo "wetype_version_code=$wetype_version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Embed Legacy Tool module with NPatch
+        id: package
+        shell: bash
+        env:
+          ORIGINAL_APK: ${{ steps.download.outputs.original_apk }}
+          MONET_APK: ${{ steps.download.outputs.monet_apk }}
+          TOOL_LEGACY: ${{ steps.download.outputs.tool_legacy }}
+          TOOL_VERSION: ${{ steps.source.outputs.tool_version }}
+          MONET_VERSION: ${{ steps.source.outputs.monet_version }}
+          WETYPE_VERSION: ${{ steps.download.outputs.wetype_version }}
+          WETYPE_VERSION_CODE: ${{ steps.download.outputs.wetype_version_code }}
+        run: |
+          set -euo pipefail
+          patch_apk() {
+            local source_apk="$1"
+            local target_apk="$2"
+            local patch_dir
+            local provider_index
+            patch_dir="$(mktemp -d)"
+            provider_index="$(grep -E '^security\.provider\.[0-9]+=' "$JAVA_HOME/conf/security/java.security" | sed -E 's/security\.provider\.([0-9]+)=.*/\1/' | sort -n | tail -n 1)"
+            test -n "$provider_index"
+            printf 'security.provider.%s=org.bouncycastle.jce.provider.BouncyCastleProvider\n' "$((provider_index + 1))" > "$patch_dir/java.security"
+            java \
+              -Djava.security.properties="$patch_dir/java.security" \
+              -cp 'tools/npatch.jar:tools/bcprov.jar' \
+              top.nkbe.npatch.patch.NPatch \
+              --npatch-keystore \
+              --embed "$TOOL_LEGACY" \
+              --output "$patch_dir" \
+              --force \
+              "$source_apk" 2>&1 | tee "$patch_dir/npatch.log"
+            if grep -q 'PatchError:' "$patch_dir/npatch.log"; then
+              echo "NPatch failed to patch $source_apk" >&2
+              exit 1
+            fi
+            mapfile -t patched_apks < <(find "$patch_dir" -maxdepth 1 -type f -name '*-npatched.apk' -print)
+            if [ "${#patched_apks[@]}" -ne 1 ]; then
+              echo "NPatch did not produce exactly one APK for $source_apk" >&2
+              find "$patch_dir" -maxdepth 1 -type f -printf '%f\n' >&2
+              exit 1
+            fi
+            mv "${patched_apks[0]}" "$target_apk"
+            apksigner verify --verbose --print-certs "$target_apk"
+          }
+
+          original_out="release-dist/WeType_Original_${WETYPE_VERSION}(${WETYPE_VERSION_CODE})_Tool_${TOOL_VERSION}.apk"
+          monet_out="release-dist/WeType_Monet_${WETYPE_VERSION}(${WETYPE_VERSION_CODE})_Monet_${MONET_VERSION}_Tool_${TOOL_VERSION}.apk"
+          patch_apk "$ORIGINAL_APK" "$original_out"
+          patch_apk "$MONET_APK" "$monet_out"
+          sha256sum "$original_out" "$monet_out" > release-dist/SHA256SUMS.txt
+
+          echo "original_out=$original_out" >> "$GITHUB_OUTPUT"
+          echo "monet_out=$monet_out" >> "$GITHUB_OUTPUT"
+
+      - name: Publish combined release
+        shell: bash
+        env:
+          TOOL_TAG: ${{ steps.source.outputs.tool_tag }}
+          TOOL_VERSION: ${{ steps.source.outputs.tool_version }}
+          MONET_TAG: ${{ steps.source.outputs.monet_tag }}
+          MONET_VERSION: ${{ steps.source.outputs.monet_version }}
+          NPATCH_TAG: ${{ steps.download.outputs.npatch_tag }}
+          WETYPE_VERSION: ${{ steps.download.outputs.wetype_version }}
+          WETYPE_VERSION_CODE: ${{ steps.download.outputs.wetype_version_code }}
+          ORIGINAL_OUT: ${{ steps.package.outputs.original_out }}
+          MONET_OUT: ${{ steps.package.outputs.monet_out }}
+        run: |
+          set -euo pipefail
+          bundle_tag="w${WETYPE_VERSION}-${WETYPE_VERSION_CODE}-monet-${MONET_VERSION}-tool-${TOOL_VERSION}"
+          if gh release view "$bundle_tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Combined release already exists: $bundle_tag"
+            exit 0
+          fi
+
+          notes_file="release-dist/RELEASE_NOTES.md"
+          {
+            printf '%s\n' '## WeType combined packages'
+            printf '\n'
+            printf '%s\n' "- Base WeType: ${WETYPE_VERSION} (${WETYPE_VERSION_CODE})"
+            printf '%s\n' "- Monet release: [${MONET_TAG}](https://github.com/${MONET_REPOSITORY}/releases/tag/${MONET_TAG})"
+            printf '%s\n' "- Tool release: [${TOOL_TAG}](https://github.com/${TOOL_REPOSITORY}/releases/tag/${TOOL_TAG})"
+            printf '%s\n' "- Embedded module: Legacy ${TOOL_VERSION} only"
+            printf '%s\n' "- Patcher: NPatch ${NPATCH_TAG}, signed with the built-in NPatch keystore"
+            printf '%s\n' '- Minimum Android version: Android 9 (API 28)'
+            printf '\n'
+            printf '%s\n' '## Assets'
+            printf '%s\n' "- \`$(basename "$ORIGINAL_OUT")\`: Original WeType with the Legacy Tool module embedded."
+            printf '%s\n' "- \`$(basename "$MONET_OUT")\`: Monet WeType with the Legacy Tool module embedded."
+            printf '%s\n' '- `SHA256SUMS.txt`: SHA-256 checksums for both APKs.'
+          } > "$notes_file"
+
+          gh release create "$bundle_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "WeType ${WETYPE_VERSION} (${WETYPE_VERSION_CODE}) - Monet ${MONET_VERSION} + Tool ${TOOL_VERSION}" \
+            --notes-file "$notes_file" \
+            "$ORIGINAL_OUT" \
+            "$MONET_OUT" \
+            release-dist/SHA256SUMS.txt
