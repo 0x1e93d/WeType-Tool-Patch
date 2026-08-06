@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes apksigner
+          sudo apt-get install --yes apksigner unzip
 
       - name: Resolve source releases
         id: source
@@ -187,6 +187,7 @@ jobs:
               -cp 'tools/npatch.jar:tools/bcprov.jar' \
               top.nkbe.npatch.patch.NPatch \
               --npatch-keystore \
+              --sigbypasslv 1 \
               --embed "$TOOL_LEGACY" \
               --output "$patch_dir" \
               --force \
@@ -202,6 +203,10 @@ jobs:
               exit 1
             fi
             mv "${patched_apks[0]}" "$target_apk"
+            if ! unzip -Z1 "$target_apk" | grep -Eq '^classes([0-9]+)?\.dex$'; then
+              echo "Patched APK has no classes*.dex and cannot be installed: $target_apk" >&2
+              exit 1
+            fi
             apksigner verify --verbose --print-certs "$target_apk"
           }
 
@@ -229,10 +234,6 @@ jobs:
         run: |
           set -euo pipefail
           bundle_tag="w${WETYPE_VERSION}-${WETYPE_VERSION_CODE}-monet-${MONET_VERSION}-tool-${TOOL_VERSION}"
-          if gh release view "$bundle_tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "Combined release already exists: $bundle_tag"
-            exit 0
-          fi
 
           notes_file="release-dist/RELEASE_NOTES.md"
           {
@@ -251,11 +252,25 @@ jobs:
             printf '%s\n' '- `SHA256SUMS.txt`：两个安装包的 SHA-256 校验值'
           } > "$notes_file"
 
-          gh release create "$bundle_tag" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "WeType ${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）免 Root 内置版" \
-            --notes-file "$notes_file" \
-            "$ORIGINAL_OUT" \
-            "$MONET_OUT" \
-            release-dist/SHA256SUMS.txt
+          if gh release view "$bundle_tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Updating existing combined release: $bundle_tag"
+            gh release upload "$bundle_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              "$ORIGINAL_OUT" \
+              "$MONET_OUT" \
+              release-dist/SHA256SUMS.txt
+            gh release edit "$bundle_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "WeType ${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）免 Root 内置版" \
+              --notes-file "$notes_file"
+          else
+            gh release create "$bundle_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "WeType ${WETYPE_VERSION}（${WETYPE_VERSION_CODE}）免 Root 内置版" \
+              --notes-file "$notes_file" \
+              "$ORIGINAL_OUT" \
+              "$MONET_OUT" \
+              release-dist/SHA256SUMS.txt
+          fi
