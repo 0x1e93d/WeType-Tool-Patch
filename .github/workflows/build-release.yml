@@ -28,10 +28,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TOOL_REPOSITORY: 0x1e93d/WeType-Tool-Releases
       MONET_REPOSITORY: 0x1e93d/WeType_Monet
-      LSPATCH_REPOSITORY: LSPosed/LSPatch
-      LSPATCH_TAG: v0.6
-      LSPATCH_JAR: jar-v0.6-398-release.jar
-      LSPATCH_SHA256: c179d884cb5dda151d6066320a2cf3658b4c15160306a0af2bd4c71faf6c3540
+      LSPATCH_REPOSITORY: JingMatrix/LSPatch
+      LSPATCH_TAG: v0.8
+      LSPATCH_JAR: lspatch.jar
+      LSPATCH_SHA256: b81094ac3d088849d9781e2678a87562936f8e0d78c4d136a9072dce40f72208
 
     steps:
       - name: Set up JDK 21
@@ -95,7 +95,7 @@ jobs:
           echo "monet_tag=$monet_tag" >> "$GITHUB_OUTPUT"
           echo "monet_version=$monet_tag" >> "$GITHUB_OUTPUT"
 
-      - name: Download upstream APKs and LSPatch v0.6
+      - name: Download upstream APKs and JingMatrix LSPatch v0.8
         id: download
         shell: bash
         env:
@@ -170,7 +170,6 @@ jobs:
             local patch_dir
             patch_dir="$(mktemp -d)"
             java -jar tools/lspatch.jar \
-              --sigbypasslv 1 \
               --embed "$TOOL_LEGACY" \
               --output "$patch_dir" \
               --force \
@@ -235,7 +234,7 @@ jobs:
             printf '%s\n' "- WeType Monet：[${MONET_TAG}](https://github.com/${MONET_REPOSITORY}/releases/tag/${MONET_TAG})"
             printf '%s\n' "- WeType Tool：[${TOOL_TAG}](https://github.com/${TOOL_REPOSITORY}/releases/tag/${TOOL_TAG})"
             printf '%s\n' "- 内置模块：WeType Tool Legacy ${TOOL_VERSION}"
-            printf '%s\n' "- 打包工具：LSPatch ${LSPATCH_TAG}，使用 LSPatch 内置签名"
+            printf '%s\n' "- 打包工具：LSPatch ${LSPATCH_TAG}，使用默认签名强度和 LSPatch 内置签名"
             printf '%s\n' '- 最低 Android 版本：Android 9（API 28）'
             printf '\n'
             printf '%s\n' '## 安装包'
