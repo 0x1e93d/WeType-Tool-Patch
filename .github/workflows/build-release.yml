@@ -129,7 +129,6 @@ jobs:
             --repo "$LSPATCH_REPOSITORY" \
             --dir tools \
             --pattern "$LSPATCH_JAR"
-          mv "tools/$LSPATCH_JAR" tools/lspatch.jar
           test -s tools/lspatch.jar
           echo "$LSPATCH_SHA256  tools/lspatch.jar" | sha256sum --check --status
 
