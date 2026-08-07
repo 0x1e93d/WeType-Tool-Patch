@@ -28,9 +28,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TOOL_REPOSITORY: 0x1e93d/WeType-Tool-Releases
       MONET_REPOSITORY: 0x1e93d/WeType_Monet
-      NPATCH_REPOSITORY: 7723mod/NPatch
-      BCPROV_VERSION: 1.78.1
-      BCPROV_SHA256: add5915e6acfc6ab5836e1fd8a5e21c6488536a8c1f21f386eeb3bf280b702d7
+      LSPATCH_REPOSITORY: LSPosed/LSPatch
+      LSPATCH_TAG: v0.6
+      LSPATCH_JAR: jar-v0.6-398-release.jar
+      LSPATCH_SHA256: c179d884cb5dda151d6066320a2cf3658b4c15160306a0af2bd4c71faf6c3540
 
     steps:
       - name: Set up JDK 21
@@ -94,7 +95,7 @@ jobs:
           echo "monet_tag=$monet_tag" >> "$GITHUB_OUTPUT"
           echo "monet_version=$monet_tag" >> "$GITHUB_OUTPUT"
 
-      - name: Download upstream APKs and latest NPatch JAR
+      - name: Download upstream APKs and LSPatch v0.6
         id: download
         shell: bash
         env:
@@ -124,23 +125,13 @@ jobs:
             exit 1
           fi
 
-          npatch_tag="$(gh release view --repo "$NPATCH_REPOSITORY" --json tagName --jq '.tagName')"
-          gh release download "$npatch_tag" \
-            --repo "$NPATCH_REPOSITORY" \
+          gh release download "$LSPATCH_TAG" \
+            --repo "$LSPATCH_REPOSITORY" \
             --dir tools \
-            --pattern 'jar-v*-release.jar'
-          mapfile -t npatch_jars < <(find tools -maxdepth 1 -type f -name 'jar-v*-release.jar' -print)
-          if [ "${#npatch_jars[@]}" -ne 1 ]; then
-            echo "Expected exactly one NPatch release JAR in release $npatch_tag" >&2
-            find tools -maxdepth 1 -type f -printf '%f\n' >&2
-            exit 1
-          fi
-          mv "${npatch_jars[0]}" tools/npatch.jar
-          test -s tools/npatch.jar
-          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
-            "https://repo1.maven.org/maven2/org/bouncycastle/bcprov-jdk18on/${BCPROV_VERSION}/bcprov-jdk18on-${BCPROV_VERSION}.jar" \
-            --output tools/bcprov.jar
-          echo "$BCPROV_SHA256  tools/bcprov.jar" | sha256sum --check --status
+            --pattern "$LSPATCH_JAR"
+          mv "tools/$LSPATCH_JAR" tools/lspatch.jar
+          test -s tools/lspatch.jar
+          echo "$LSPATCH_SHA256  tools/lspatch.jar" | sha256sum --check --status
 
           original_name="$(basename "${original_apks[0]}")"
           if [[ "$original_name" =~ ^Wetype_([0-9]+([.][0-9]+)+)\(([0-9]+)\)\.apk$ ]]; then
@@ -156,11 +147,11 @@ jobs:
           echo "original_apk=${original_apks[0]}" >> "$GITHUB_OUTPUT"
           echo "monet_apk=${monet_apks[0]}" >> "$GITHUB_OUTPUT"
           echo "tool_legacy=$tool_legacy" >> "$GITHUB_OUTPUT"
-          echo "npatch_tag=$npatch_tag" >> "$GITHUB_OUTPUT"
+          echo "lspatch_tag=$LSPATCH_TAG" >> "$GITHUB_OUTPUT"
           echo "wetype_version=$wetype_version" >> "$GITHUB_OUTPUT"
           echo "wetype_version_code=$wetype_version_code" >> "$GITHUB_OUTPUT"
 
-      - name: Embed Legacy Tool module with NPatch
+      - name: Embed Legacy Tool module with LSPatch
         id: package
         shell: bash
         env:
@@ -177,34 +168,35 @@ jobs:
             local source_apk="$1"
             local target_apk="$2"
             local patch_dir
-            local provider_index
             patch_dir="$(mktemp -d)"
-            provider_index="$(grep -E '^security\.provider\.[0-9]+=' "$JAVA_HOME/conf/security/java.security" | sed -E 's/security\.provider\.([0-9]+)=.*/\1/' | sort -n | tail -n 1)"
-            test -n "$provider_index"
-            printf 'security.provider.%s=org.bouncycastle.jce.provider.BouncyCastleProvider\n' "$((provider_index + 1))" > "$patch_dir/java.security"
-            java \
-              -Djava.security.properties="$patch_dir/java.security" \
-              -cp 'tools/npatch.jar:tools/bcprov.jar' \
-              top.nkbe.npatch.patch.NPatch \
-              --npatch-keystore \
+            java -jar tools/lspatch.jar \
               --sigbypasslv 1 \
               --embed "$TOOL_LEGACY" \
               --output "$patch_dir" \
               --force \
-              "$source_apk" 2>&1 | tee "$patch_dir/npatch.log"
-            if grep -q 'PatchError:' "$patch_dir/npatch.log"; then
-              echo "NPatch failed to patch $source_apk" >&2
+              "$source_apk" 2>&1 | tee "$patch_dir/lspatch.log"
+            if grep -q 'PatchError:' "$patch_dir/lspatch.log"; then
+              echo "LSPatch failed to patch $source_apk" >&2
               exit 1
             fi
-            mapfile -t patched_apks < <(find "$patch_dir" -maxdepth 1 -type f -name '*-npatched.apk' -print)
+            mapfile -t patched_apks < <(find "$patch_dir" -maxdepth 1 -type f -name '*-lspatched.apk' -print)
             if [ "${#patched_apks[@]}" -ne 1 ]; then
-              echo "NPatch did not produce exactly one APK for $source_apk" >&2
+              echo "LSPatch did not produce exactly one APK for $source_apk" >&2
               find "$patch_dir" -maxdepth 1 -type f -printf '%f\n' >&2
               exit 1
             fi
             mv "${patched_apks[0]}" "$target_apk"
-            if ! unzip -Z1 "$target_apk" | grep -Eq '^classes([0-9]+)?\.dex$'; then
-              echo "Patched APK has no classes*.dex and cannot be installed: $target_apk" >&2
+            unzip -Z1 "$target_apk" > "$patch_dir/apk-entries.txt"
+            if ! grep -Fxq 'classes.dex' "$patch_dir/apk-entries.txt"; then
+              echo "Patched APK has no root classes.dex and cannot be installed: $target_apk" >&2
+              exit 1
+            fi
+            if ! grep -Fxq 'assets/lspatch/origin.apk' "$patch_dir/apk-entries.txt"; then
+              echo "Patched APK has no embedded original APK: $target_apk" >&2
+              exit 1
+            fi
+            if ! grep -Fxq 'assets/lspatch/modules/com.wetype.tool.apk' "$patch_dir/apk-entries.txt"; then
+              echo "Patched APK has no embedded WeType Tool module: $target_apk" >&2
               exit 1
             fi
             apksigner verify --verbose --print-certs "$target_apk"
@@ -226,7 +218,7 @@ jobs:
           TOOL_VERSION: ${{ steps.source.outputs.tool_version }}
           MONET_TAG: ${{ steps.source.outputs.monet_tag }}
           MONET_VERSION: ${{ steps.source.outputs.monet_version }}
-          NPATCH_TAG: ${{ steps.download.outputs.npatch_tag }}
+          LSPATCH_TAG: ${{ steps.download.outputs.lspatch_tag }}
           WETYPE_VERSION: ${{ steps.download.outputs.wetype_version }}
           WETYPE_VERSION_CODE: ${{ steps.download.outputs.wetype_version_code }}
           ORIGINAL_OUT: ${{ steps.package.outputs.original_out }}
@@ -243,7 +235,7 @@ jobs:
             printf '%s\n' "- WeType Monet：[${MONET_TAG}](https://github.com/${MONET_REPOSITORY}/releases/tag/${MONET_TAG})"
             printf '%s\n' "- WeType Tool：[${TOOL_TAG}](https://github.com/${TOOL_REPOSITORY}/releases/tag/${TOOL_TAG})"
             printf '%s\n' "- 内置模块：WeType Tool Legacy ${TOOL_VERSION}"
-            printf '%s\n' "- 打包工具：NPatch ${NPATCH_TAG}，使用 NPatch 内置签名"
+            printf '%s\n' "- 打包工具：LSPatch ${LSPATCH_TAG}，使用 LSPatch 内置签名"
             printf '%s\n' '- 最低 Android 版本：Android 9（API 28）'
             printf '\n'
             printf '%s\n' '## 安装包'

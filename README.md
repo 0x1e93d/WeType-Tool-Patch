@@ -24,11 +24,11 @@ WeType_Monet_<WeType版本>(<versionCode>)_Monet_<Monet版本>_Tool_<Tool版本>
 ## 版本说明
 
 - 内置模块：WeType Tool Legacy
-- 打包工具： [NPatch](https://github.com/7723mod/NPatch)
+- 打包工具：[LSPatch v0.6](https://github.com/LSPosed/LSPatch/releases/tag/v0.6)
 - 最低 Android 版本：Android 9（API 28）
 - `SHA256SUMS.txt`：两个 APK 的 SHA-256 校验值
 
-Release 正文会记录本次使用的 WeType 底包、Monet、Tool 和 NPatch 版本。
+Release 正文会记录本次使用的 WeType 底包、Monet、Tool 和 LSPatch 版本。
 
 ## 安装
 
@@ -58,7 +58,7 @@ Release 正文会记录本次使用的 WeType 底包、Monet、Tool 和 NPatch �
 
 - [WeType-Tool-Releases](https://github.com/0x1e93d/WeType-Tool-Releases)：Tool 模块安装包
 - [WeType Monet](https://github.com/0x1e93d/WeType_Monet)：Monet 风格适配
-- [NPatch](https://github.com/7723mod/NPatch)：APK 内置打包工具
+- [LSPatch](https://github.com/LSPosed/LSPatch)：APK 内置打包工具
 
 ## 免责声明
 
